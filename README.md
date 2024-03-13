@@ -1,13 +1,15 @@
 
 <!-- README.md is generated from README.Rmd. Please edit that file -->
 
+<!-- badges: start -->
+[![R-CMD-check](https://github.com/harvard-ufds/saeczi/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/harvard-ufds/saeczi/actions/workflows/R-CMD-check.yaml)
+[![CRAN
+status](https://www.r-pkg.org/badges/version/saeczi)](https://CRAN.R-project.org/package=saeczi)
+<!-- badges: end -->
+
 # saeczi
 
 ### (Small Area Estimation for Continuous Zero Inflated data)
-
-<!-- badges: start -->
-[![R-CMD-check](https://github.com/harvard-ufds/saeczi/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/harvard-ufds/saeczi/actions/workflows/R-CMD-check.yaml)
-<!-- badges: end -->
 
 ## Overview
 
@@ -31,7 +33,14 @@ sequentially.
 
 ## Installation
 
-You can install the developmental version of `saeczi` from GitHub with:
+Install the latest CRAN release with:
+
+``` r
+install.packages("saeczi")
+```
+
+You can also install the developmental version of `saeczi` from GitHub
+with:
 
 ``` r
 # install.packages("pak")
@@ -61,22 +70,14 @@ corresponding bootstrapped (B = 500) MSE estimate as follows.
 library(saeczi)
 data(pop)
 data(samp)
-
 result <- saeczi(samp_dat = samp,
                  pop_dat = pop, 
                  lin_formula =  DRYBIO_AG_TPA_live_ADJ ~ tcc16 + elev,
                  log_formula = DRYBIO_AG_TPA_live_ADJ ~ tcc16 + elev,
                  domain_level = "COUNTYFIPS",
                  mse_est = TRUE,
-                 B = 500,
+                 B = 500L,
                  parallel = FALSE)
-#> ================================================================================
-#> • Fitting Models...
-#> • Beginning Bootstrap...
-#>                                                                   - Fitting to Bootstrap samples ✓
-#>                                       - Estimating MSE ✓
-#> • Compiling Results...
-#> ================================================================================
 ```
 
 The function returns the original call, a data frame containing the
@@ -95,15 +96,11 @@ few rows of the results:
 
 ``` r
 result$res |> head()
-#>   domain       mse      est
-#> 1  41001 173.58940 14.85495
-#> 2  41003  42.43279 97.74967
-#> 3  41005 581.01815 86.02207
-#> 4  41007  35.98329 76.24752
-#> 5  41009 222.58951 70.28624
-#> 6  41011 213.38928 87.65072
+#>   COUNTYFIPS       mse      est
+#> 1      41001  43.70587 14.85495
+#> 2      41003 203.05199 97.74967
+#> 3      41005  94.73864 86.02207
+#> 4      41007  76.49921 76.24752
+#> 5      41009 741.43291 70.28624
+#> 6      41011  78.89173 87.65072
 ```
-
-This output format allows for easy results plotting
-
-![](figs/README-res_plot-1.png)
