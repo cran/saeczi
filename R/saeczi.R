@@ -30,8 +30,6 @@
 #' 
 #' * res: A data.frame containing the estimates and mse estimates
 #' 
-#' * bootstrap_log: A list containing any messages and warnings that occur during the bootstrap process
-#' 
 #' * lin_mod: The modeling object used to fit the original linear model
 #' 
 #' * log_mod: The modeling object used to fit the original logistic model
@@ -76,17 +74,19 @@ saeczi <- function(samp_dat,
   check_inherits(list(mse_est, parallel), "logical")
   
   check_parallel(parallel)
+  check_re(pop_dat, samp_dat, domain_level)
   
   if(!(estimand %in% c("means", "totals"))) {
     stop("Invalid estimand, must be either 'means' or 'totals'")
   }
   
-  # creating strings of original X, Y names
   Y <- deparse(lin_formula[[2]])
   
   lin_X <- unlist(str_extract_all_base(deparse(lin_formula[[3]]), "\\w+"))
-  
   log_X <- unlist(str_extract_all_base(deparse(log_formula[[3]]), "\\w+"))
+  rand_intercept <- paste0("( 1 | ", domain_level, " )")
+  lin_formula <- reformulate(c(lin_X, rand_intercept), response = Y)
+  log_formula <- reformulate(c(log_X, rand_intercept), response = paste0(Y, "!= 0"))
   
   all_preds <- unique(lin_X, log_X)
   
@@ -99,82 +99,18 @@ saeczi <- function(samp_dat,
   mod2 <- original_out$glmer
   .data <- pop_dat[ ,c(all_preds, domain_level)]
   
-  unit_level_preds <- setNames(
-    predict(mod1, newdata = .data, allow.new.levels = TRUE) * predict(mod2, newdata = .data, allow.new.levels = TRUE, type = "response"),
-    .data[ , domain_level, drop = T]
-  )
-  
-  if (estimand == "means") {
-    zi_domain_means <- aggregate(unit_level_preds, by = list(names(unit_level_preds)), FUN = mean)
-    names(zi_domain_means) <- c(domain_level, "est")
-    original_pred <- zi_domain_means
-  } else {
-    zi_domain_totals <- aggregate(unit_level_preds, by = list(names(unit_level_preds)), FUN = sum)
-    names(zi_domain_totals) <- c(domain_level, "est")
-    original_pred <- zi_domain_totals
-  }
+  original_pred <- collect_preds(mod1, mod2, estimand, .data, domain_level)
   
   if (mse_est) {
     
-    zi_mod_coefs <- mse_coefs(original_out$lmer, original_out$glmer)
+    boot_pop_data <- generate_boot_pop(original_out,
+                                       pop_dat,
+                                       domain_level,
+                                       log_X,
+                                       all_preds)
     
-    params_and_domain <- setNames(
-      zi_mod_coefs$b_i,
-      zi_mod_coefs$domain_levels
-    )
-    
-    pop_b_i <- data.frame(
-      dom = pop_dat[ , domain_level, drop = TRUE],
-      b_i = params_and_domain[pop_dat[ , domain_level, drop = TRUE]]
-    )
-    
-    pop_b_i[is.na(pop_b_i$b_i), "b_i"] <- 0
-    
-    x_matrix <- model.matrix(
-      as.formula(paste0(" ~ ", paste(all_preds, collapse = " + "))),
-      data = pop_dat[ , all_preds, drop = FALSE]
-    )
-    
-    indv_re <- data.frame(
-      dom = pop_dat[ , domain_level, drop = TRUE],
-      eps_ij = rnorm(nrow(pop_dat), 0, sqrt(zi_mod_coefs$sig2_eps_hat))
-    )
-    
-    # tweak for allowing new levels
-    pop_doms <- unique(pop_dat[[domain_level]])
-    all_doms <- unique(pop_doms, zi_mod_coefs$domain_levels)
-    
-    area_re_lkp <- setNames(
-      rnorm(length(all_doms), 0, sqrt(zi_mod_coefs$sig2_mu_hat)),
-      all_doms
-    )
-    
-    rand_effs <- data.frame(
-      indv_re,
-      u_j = area_re_lkp[pop_dat[ , domain_level, drop = TRUE]]
-    )
-    
-    p_hat_i <- 1/(1 + exp(-(x_matrix[ , c("(Intercept)", log_X)] %*% zi_mod_coefs$alpha_1 + pop_b_i$b_i)))
-    
-    delta_i_star <- rbinom(length(p_hat_i), 1, p_hat_i)
-    
-    boot_dat_params <- list(
-      random_effects = rand_effs,
-      p_hat_i = p_hat_i,
-      delta_i_star = delta_i_star
-    )
-
-    linear_preds <- (x_matrix[, colnames(model.matrix(original_out$lmer))] %*% zi_mod_coefs$beta_hat) +
-      boot_dat_params$random_effects$u_j + boot_dat_params$random_effects$eps_ij
-
-    boot_pop_data <- data.frame(
-      pop_dat[ , c(domain_level, all_preds)],
-      response = linear_preds * boot_dat_params$delta_i_star
-    ) 
-    
-    boot_lin_formula <- as.formula(paste0("response ~ ", paste(lin_X, collapse = " + ")))
-    
-    boot_log_formula <- as.formula(paste0("response ~ ", paste(log_X, collapse = " + ")))
+    boot_lin_formula <- reformulate(c(lin_X, rand_intercept), "response")
+    boot_log_formula <- reformulate(c(log_X, rand_intercept), "response != 0")
     
     if (estimand == "means") {
       boot_truth <- boot_pop_data |> 
@@ -185,8 +121,7 @@ saeczi <- function(samp_dat,
         group_by(!!rlang::sym(domain_level)) |> 
         summarise(domain_est = sum(response))
     }
-
-    # create bootstrap samples 
+    
     boot_samp_ls <- samp_by_grp(samp_dat, boot_pop_data, domain_level, B) 
     
     if (parallel) {
@@ -206,6 +141,7 @@ saeczi <- function(samp_dat,
       names(boot_res) <- c("preds", "log")
       
     } else {
+      
       res <- 
         purrr::map(.x = boot_samp_ls,
                    .f = \(.x) { 
@@ -220,23 +156,21 @@ saeczi <- function(samp_dat,
                    ))
       
       beta_lm_mat <- res |>
-        map_dfr(.f = ~ .x$params$beta_lm) |>
+        map_dfr(.f = ~ .x$beta_lm) |>
         as.matrix()
       
       beta_glm_mat <- res |>
-        map_dfr(.f = ~ .x$params$beta_glm) |>
+        map_dfr(.f = ~ .x$beta_glm) |>
         as.matrix()
       
       u_lm <- res |> 
-        map_dfr(.f = ~ .x$params$u_lm) |> 
+        map_dfr(.f = ~ .x$u_lm) |> 
         as.matrix()
       
       u_glm <- res |> 
-        map_dfr(.f = ~ .x$params$u_glm) |> 
+        map_dfr(.f = ~ .x$u_glm) |> 
         as.matrix()
       
-      # sometimes u_lm will have fewer domains once it is filtered
-      # down to positive response values
       u_lm[is.na(u_lm)] <- 0
       
       preds_full <- generate_mse(.data = boot_pop_data,
@@ -249,12 +183,8 @@ saeczi <- function(samp_dat,
                                  lin_X = lin_X,
                                  log_X = log_X,
                                  estimand = estimand)
-      
-      
-      log_lst <- res |>
-        map(.f = ~ .x$log)
-      
-      boot_res <- list(preds = preds_full, log = log_lst)
+
+      boot_res <- list(preds = preds_full)
       
     }
     
@@ -264,19 +194,15 @@ saeczi <- function(samp_dat,
     final_df <- mse_df |> 
       left_join(original_pred, by = domain_level) 
     
-    bootstrap_log <- boot_res$log_lst
-    
   } else {
     
     final_df <- original_pred
-    bootstrap_log <- NA
     
   }
-  
+
   out <- list(
     call = funcCall,
     res = final_df,
-    bootstrap_log = bootstrap_log,
     lin_mod = original_out$lmer,
     log_mod = original_out$glmer
   )
@@ -325,6 +251,3 @@ print.summary.zi_mod <- function(x, ...) {
   cat("\n")
   print(x$log_mod)
 }
-
-
-

@@ -32,6 +32,8 @@ samp_by_grp <- function(samp, pop, dom_nm, B) {
     dplyr::mutate(map_args = list(list(n.x, n.y, add_to))) 
   
   all_samps <- vector("list", length = B)
+  ord <- rep(setup[[dom_nm]], times = setup$n.x)
+  pop_ordered <- pop[match(ord, pop[[dom_nm]]), ]
   
   for (i in 1:B) {
     ids <- setup |>
@@ -41,7 +43,7 @@ samp_by_grp <- function(samp, pop, dom_nm, B) {
       dplyr::pull(samps) |>
       unlist()
     
-    out <- pop[ids, ]
+    out <- pop_ordered[ids, ]
     all_samps[[i]] <- out
   }
   
@@ -66,37 +68,18 @@ fit_zi <- function(samp_dat,
                    domain_level) {
   
   Y <- deparse(lin_formula[[2]])
-  lin_X <- unlist(str_extract_all_base(deparse(lin_formula[[3]]), "\\w+"))
-  log_X <- unlist(str_extract_all_base(deparse(log_formula[[3]]), "\\w+"))
-  
-  # function will always treat domain_level as the random intercept
-  rand_intercept <- paste0("( 1 | ", domain_level, " )")
-  
-  # of form y ~ x_1 + ... + x_n + (1 | domain_level)
-  lin_reg_formula <- stats::as.formula(
-    paste0(deparse(lin_formula[[2]]), " ~ ",
-           paste(lin_X, collapse = " + "), " + ",
-           rand_intercept)
-  )
-  
-  # of form y != 0 ~ x_1 + ... + x_n + (1 | domain_level)
-  log_reg_formula <- stats::as.formula(
-    paste0(deparse(log_formula[[2]]), " != 0 ~ ",
-           paste(log_X, collapse = " + "), " + ",
-           rand_intercept)
-  )
   
   # creating nonzero version of our sample data set
-  nz <- samp_dat[samp_dat[ , Y] > 0, ]
+  nz <- samp_dat[samp_dat[[Y]] > 0, ]
   
   # fit linear mixed model on nonzero data
   lmer_nz <- suppressMessages(
-    lme4::lmer(lin_reg_formula, data = nz)
+    lme4::lmer(lin_formula, data = nz)
   )
   
   # Fit logistic mixed effects on ALL data
   glmer_z <- suppressMessages(
-    lme4::glmer(log_reg_formula, data = samp_dat, family = 'binomial')
+    lme4::glmer(log_formula, data = samp_dat, family = 'binomial')
   )
   
   return(list(lmer = lmer_nz, glmer = glmer_z))
@@ -174,6 +157,84 @@ generate_mse <- function(.data,
   
 }
 
+#' Generate the Bootstrap population data
+#' 
+#' @param original_out List containing original model objects
+#' @param pop_dat The population data frame
+#' @param domain_level Character. The domain column names in pop_dat
+#' @param log_X Vector of characters containing logistic model predictor names
+#' @param all_preds Vector of characters containing all predictor names
+#' 
+#' @return The population bootstrap data
+#' @noRd
+
+generate_boot_pop <- function(original_out, 
+                              pop_dat,
+                              domain_level,
+                              log_X,
+                              all_preds) {
+  
+  zi_mod_coefs <- mse_coefs(original_out$lmer, original_out$glmer)
+  
+  params_and_domain <- setNames(
+    zi_mod_coefs$b_i,
+    zi_mod_coefs$domain_levels
+  )
+  
+  pop_b_i <- data.frame(
+    dom = pop_dat[ , domain_level, drop = TRUE],
+    b_i = params_and_domain[pop_dat[ , domain_level, drop = TRUE]]
+  )
+  
+  pop_b_i[is.na(pop_b_i$b_i), "b_i"] <- 0
+  
+  x_matrix <- model.matrix(
+    as.formula(paste0(" ~ ", paste(all_preds, collapse = " + "))),
+    data = pop_dat[ , all_preds, drop = FALSE]
+  )
+  
+  indv_re <- data.frame(
+    dom = pop_dat[ , domain_level, drop = TRUE],
+    eps_ij = rnorm(nrow(pop_dat), 0, sqrt(zi_mod_coefs$sig2_eps_hat))
+  )
+  
+  # tweak for allowing new levels
+  pop_doms <- unique(pop_dat[[domain_level]])
+  all_doms <- unique(pop_doms, zi_mod_coefs$domain_levels)
+  
+  area_re_lkp <- setNames(
+    rnorm(length(all_doms), 0, sqrt(zi_mod_coefs$sig2_mu_hat)),
+    all_doms
+  )
+  
+  rand_effs <- data.frame(
+    indv_re,
+    u_j = area_re_lkp[pop_dat[ , domain_level, drop = TRUE]]
+  )
+  
+  x <- x_matrix[ , c("(Intercept)", log_X)] %*% zi_mod_coefs$alpha_1 + pop_b_i$b_i
+  p_hat_i <- binomial()$linkinv(x)
+  
+  delta_i_star <- rbinom(length(p_hat_i), 1, p_hat_i)
+  
+  boot_dat_params <- list(
+    random_effects = rand_effs,
+    p_hat_i = p_hat_i,
+    delta_i_star = delta_i_star
+  )
+  
+  linear_preds <- (x_matrix[, colnames(model.matrix(original_out$lmer))] %*% zi_mod_coefs$beta_hat) +
+    boot_dat_params$random_effects$u_j + boot_dat_params$random_effects$eps_ij
+  
+  boot_pop_data <- data.frame(
+    pop_dat[ , c(domain_level, all_preds)],
+    response = linear_preds * boot_dat_params$delta_i_star
+  ) 
+  
+  return(boot_pop_data)
+  
+}
+
 #' Bootstrap procedure for the parallel option
 #' 
 #' @param x The vector 1:B where B is the number of total bootstraps
@@ -215,20 +276,21 @@ boot_rep_par <- function(x,
                       .options = furrr_options(seed = TRUE))
   
   beta_lm_mat <- res |>
-    map_dfr(.f = ~ .x$params$beta_lm) |>
+    map_dfr(.f = ~ .x$beta_lm) |>
     as.matrix()
   
   beta_glm_mat <- res |>
-    map_dfr(.f = ~ .x$params$beta_glm) |>
+    map_dfr(.f = ~ .x$beta_glm) |>
     as.matrix()
   
   u_lm <- res |> 
-    map_dfr(.f = ~ .x$params$u_lm) |> 
+    map_dfr(.f = ~ .x$u_lm) |> 
     as.matrix()
   
   u_glm <- res |> 
-    map_dfr(.f = ~ .x$params$u_glm) |> 
+    map_dfr(.f = ~ .x$u_glm) |> 
     as.matrix()
+  
   
   # sometimes u_lm will have fewer domains once it is filtered
   # down to positive response values
@@ -245,10 +307,7 @@ boot_rep_par <- function(x,
                              log_X = log_X,
                              estimand = estimand)
   
-  log_lst <- res |>
-    map(.f = ~ .x$log)
-  
-  list(preds_full, log_lst)
+  return(list(preds = preds_full))
   
 }
 
@@ -292,8 +351,8 @@ str_extract_all_base <- function(string, pattern) {
 mod_param_fmt <- function(.fit, ref = NULL) {
   
   if (!is.null(.fit)) {
-    .lmer <- .fit$result$lmer
-    .glmer <- .fit$result$glmer
+    .lmer <- .fit$lmer
+    .glmer <- .fit$glmer
     
     beta_lm <- lme4::fixef(.lmer)
     beta_glm <- lme4::fixef(.glmer)
@@ -350,18 +409,15 @@ boot_rep <- function(boot_samp,
                      boot_lin_formula,
                      boot_log_formula) {
   
-  # capture warnings and messages silently when bootstrapping
-  fit_zi_capture <- capture_all(fit_zi)
-  
   boot_samp_fit  <- tryCatch(
     {
-      out <- fit_zi_capture(boot_samp,
-                            boot_lin_formula,
-                            boot_log_formula,
-                            domain_level)
+      out <- fit_zi(boot_samp,
+                    boot_lin_formula,
+                    boot_log_formula,
+                    domain_level)
       
       ps <- mod_param_fmt(out)
-      return(list(params = ps, log = out$log))
+      return(ps)
       
     },
     error = function(cond) {
@@ -375,12 +431,12 @@ boot_rep <- function(boot_samp,
                                      .lm = lm_cfs,
                                      .glm = glm_cfs))
       
-      return(list(params = ps, log = cond))
+      return(ps)
       
     }
   )
   
-  return(list(params_ls = boot_samp_fit$params, log = boot_samp_fit$log))
+  return(boot_samp_fit)
   
 }
 
@@ -491,5 +547,66 @@ check_parallel <- function(x, call = rlang::caller_env()) {
     }
   }
   
+  if (x && future::nbrOfWorkers() == 1) {
+    warning("Argument `parallel` is set to true, but only one core is being used")
+  }
+  
   invisible(x)
+}
+
+#' Checking random effect column
+#' 
+#' @param pop_dat The population dataset to check
+#' @param domain_level Character. The domain level identifier.
+#' 
+#' @return Nothing if the check is passed, but and error if it fails
+#' @noRd
+check_re <- function(pop_dat, samp_dat, domain_level) {
+  if (!(domain_level %in% names(pop_dat))) {
+    stop(paste0("Column ", domain_level, " does not exist in pop_dat"))
+  }
+  if (!(domain_level %in% names(samp_dat))) {
+    stop(paste0("Column ", domain_level, " does not exist in samp_dat"))
+  }
+  if (!inherits(pop_dat[[domain_level]], "character") || !inherits(samp_dat[[domain_level]], "character")) {
+    stop(paste0("Column ", domain_level, " must be of type `character` in both pop_dat and samp_dat"))
+  }
+}
+
+#' Fast aggregation
+#' 
+#' @noRd
+agg_stat <- function(vals, nms, .f) {
+  agg <- tapply(vals, nms, .f)
+  out <- data.frame(nms = names(agg), vals = agg)
+  out
+}
+
+#' Predict with both models and return result
+#' 
+#' @param mod1 Linear model object
+#' @param mod2 Logistic model object
+#' @param estimand Character, either "means" or "totals"
+#' @param .data The data to predict on
+#' @param domain_level Character name of domain variable in .data
+#' 
+#' @returns A data frame of results
+#' @noRd
+
+collect_preds <- function(mod1, mod2, estimand, .data, domain_level) {
+  
+  lin_pred <- predict(mod1, newdata = .data, allow.new.levels = TRUE)
+  log_pred <- predict(mod2, newdata = .data, type = "response", allow.new.levels = TRUE)
+    
+  unit_preds <- lin_pred * log_pred
+  
+  out <- switch(estimand,
+                "means" = agg_stat(unit_preds, .data[[domain_level]], mean),
+                "totals" = agg_stat(unit_preds, .data[[domain_level]], sum),
+                stop())
+  
+  
+  names(out) <- c(domain_level, "est")
+  out
+  
 }
