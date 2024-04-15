@@ -19,7 +19,7 @@ In particular, we are working with variables that follow a
 semi-continuous distribution with a mixture of zeroes and positive
 continuously distributed values. An example can be seen below.
 
-![](figs/README-zi-plot-1.png)
+<img src="figs/README-zi-plot-1.png" style="width:60.0%" />
 
 `saeczi` first fits a linear mixed model to the non-zero portion of the
 response and then a generalized linear mixed model with binomial
@@ -80,28 +80,50 @@ result <- saeczi(samp_dat = samp,
                  B = 1000L)
 ```
 
+#### Return
+
 The function returns the following objects:
 
-| Name            | Description                                                               |
-|:----------------|:--------------------------------------------------------------------------|
-| `call`          | The original function call                                                |
-| `res`           | A data.frame containing the estimates                                     |
-| `bootstrap_log` | A log of any modeling warnings or messages from the bootstrap procedure   |
-| `lin_mod`       | The linear model object of class `merMod` used to compute the estimates   |
-| `log_mod`       | The logistic model object of class `merMod` used to compute the estimates |
+| Name      | Description                                                               |
+|:----------|:--------------------------------------------------------------------------|
+| `call`    | The original function call                                                |
+| `res`     | A data.frame containing the estimates                                     |
+| `lin_mod` | The linear model object of class `merMod` used to compute the estimates   |
+| `log_mod` | The logistic model object of class `merMod` used to compute the estimates |
 
 As there are 36 total counties in Oregon, we will just look at the first
 few rows of the results:
 
 ``` r
 result$res |> head()
-#>   COUNTYFIPS      mse       est
-#> 1      41001 216.3487  14.57288
-#> 2      41003 144.6466 103.33016
-#> 3      41005 276.4164  86.08616
-#> 4      41007 584.4503  78.79615
-#> 5      41009 169.2617  73.98920
-#> 6      41011 656.6422  90.44174
+#>   COUNTYFIPS       mse       est
+#> 1      41001  580.9639  14.57288
+#> 2      41003  935.5949 103.33016
+#> 3      41005  354.9449  86.08616
+#> 4      41007 2641.2648  78.79615
+#> 5      41009 1450.9188  73.98920
+#> 6      41011  641.2264  90.44174
 ```
 
 ### Parallelization
+
+`saeczi` supports parallelization through the `future` package to speed
+up the bootstrapping process, but requires a small amount of additional
+work on the part of the user. It is not enough just to specify
+`parallel = TRUE` in the function signature as a `future::plan` must
+also be specified.
+
+Below is an example that uses multisession’ future resolution with 6
+threads:
+
+``` r
+future::plan("multisession", workers = 6)
+result_par <- saeczi(samp_dat = samp,
+                     pop_dat = pop, 
+                     lin_formula =  DRYBIO_AG_TPA_live_ADJ ~ tcc16 + elev,
+                     log_formula = DRYBIO_AG_TPA_live_ADJ ~ tcc16,
+                     domain_level = "COUNTYFIPS",
+                     mse_est = TRUE,
+                     parallel = TRUE,
+                     B = 1000L)
+```

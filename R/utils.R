@@ -32,8 +32,7 @@ samp_by_grp <- function(samp, pop, dom_nm, B) {
     dplyr::mutate(map_args = list(list(n.x, n.y, add_to))) 
   
   all_samps <- vector("list", length = B)
-  ord <- rep(setup[[dom_nm]], times = setup$n.x)
-  pop_ordered <- pop[match(ord, pop[[dom_nm]]), ]
+  pop_ordered <- pop[order(pop[[dom_nm]]), ]
   
   for (i in 1:B) {
     ids <- setup |>
@@ -248,7 +247,7 @@ generate_boot_pop <- function(original_out,
 #' @param lin_X A character vector with the names of the predictor variables used in the linear model
 #' @param log_X A character vector with the names of the predictor variables used in the logistic model
 #' 
-#' @return A list containing the mse estimates data.frame as well as the log from fitting the models to each bootstrap sample
+#' @return A list containing the mse estimates data.frame.
 #' @noRd
 #' 
 boot_rep_par <- function(x,
@@ -401,7 +400,7 @@ mod_param_fmt <- function(.fit, ref = NULL) {
 #' @param boot_lin_formula The formula to be used for the linear model
 #' @param boot_log_formula The formula to be used for the logistic model
 #' 
-#' @return A list containing the properly formated model parameters from fitting the two models to the sample data as well as a log of any messages or warnings from the model fitting
+#' @return A list containing the properly formated model parameters from fitting the two models to the sample data.
 #' @noRd
 #' 
 boot_rep <- function(boot_samp,
