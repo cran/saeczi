@@ -1,26 +1,14 @@
-#' Fit a zero-inflation estimator to a dataset
+#' Fit a zero-inflation estimator.
 #'
-#' Calculate the domain predictions using the zero-inflation estimator, and outputs
-#' those domain-level predictions, in the form of a dataframe. It contains
-#' the estimates for each domain, as well as the mean squared error estimates should
-#' the user choose. The output of the function is a list, with the first item being
-#' said dataframe, and the second being the R squared value of the model.
-#'
-#' @param samp_dat A dataframe with domains, predictor variables, and the response variable of a sample
-#' @param pop_dat A dataframe with domains and predictor variables of a population
-#' @param lin_formula model formula for the linear regression model
-#' @param log_formula model formula for the logistic regression model
-#' @param domain_level A string of the column name in the dataframes that reflect the domain level
-#' @param B An integer of the number of reps desired for the bootstrap
-#' @param mse_est A boolean that specifies if the user
-#' @param estimand A string specifying whether the estimates should be 'totals' or 'means'.
-#' @param parallel Compute MSE estimation in parallel
-#'
-#' @details The arguments `lin_formula`, and `log_formula`
-#' can be unquoted or quoted. The function can handle both forms.
-#'
-#' The two datasets (pop_dat and samp_dat) must have the same column names for the domain level,
-#' as well as the predictor variables for the function to work.
+#' @param samp_dat A data.frame with domains, auxiliary variables, and the response variable of a sample
+#' @param pop_dat A data.frame with domains and auxiliary variables of a population.
+#' @param lin_formula Formula. Specification of the response and fixed effects of the linear regression model
+#' @param log_formula Formula. Specification of the response and fixed effects of the logistic regression model
+#' @param domain_level String. The column name in samp_dat and pop_dat that encodes the domain level
+#' @param B Integer. The number of bootstraps to be used in MSE estimation.
+#' @param mse_est Logical. Whether or not MSE estimation should happen.
+#' @param estimand String. Whether the estimates should be 'totals' or 'means'.
+#' @param parallel Logical. Should the MSE estimation be computed in parallel
 #'
 #' @returns
 #' An object of class `zi_mod` with defined `print()` and `summary()` methods.
@@ -40,9 +28,9 @@
 #'
 #' lin_formula <- DRYBIO_AG_TPA_live_ADJ ~ tcc16 + elev
 #'
-#' result <- saeczi(samp,
-#'                  pop,
-#'                  lin_formula,
+#' result <- saeczi(samp_dat = samp,
+#'                  pop_dat = pop,
+#'                  lin_formula = lin_formula,
 #'                  log_formula = lin_formula,
 #'                  domain_level = "COUNTYFIPS",
 #'                  mse_est = FALSE)
@@ -67,12 +55,12 @@ saeczi <- function(samp_dat,
 
   funcCall <- match.call()
 
-  check_inherits(list(samp_dat, pop_dat), "data.frame")
-  check_inherits(list(lin_formula, log_formula), "formula")
-  check_inherits(list(domain_level, estimand), "character")
-  check_inherits(B, "integer")
-  check_inherits(list(mse_est, parallel), "logical")
-
+  check_inherits("data.frame", samp_dat, pop_dat)
+  check_inherits("formula", lin_formula, log_formula)
+  check_inherits("character", domain_level, estimand)
+  check_inherits("integer", B)
+  check_inherits("logical", mse_est, parallel)
+  
   check_parallel(parallel)
   check_re(pop_dat, samp_dat, domain_level)
 
@@ -80,7 +68,7 @@ saeczi <- function(samp_dat,
     stop("Invalid estimand, must be either 'means' or 'totals'")
   }
 
-  Y <- deparse(lin_formula[[2]])
+  Y <- toString(lin_formula[[2]])
 
   lin_X <- unlist(str_extract_all_base(deparse(lin_formula[[3]]), "\\w+"))
   log_X <- unlist(str_extract_all_base(deparse(log_formula[[3]]), "\\w+"))
@@ -88,7 +76,7 @@ saeczi <- function(samp_dat,
   lin_formula <- reformulate(c(lin_X, rand_intercept), response = Y)
   log_formula <- reformulate(c(log_X, rand_intercept), response = paste0(Y, "!= 0"))
 
-  all_preds <- unique(lin_X, log_X)
+  all_preds <- unique(c(lin_X, log_X))
 
   original_out <- fit_zi(samp_dat,
                          lin_formula,
@@ -139,22 +127,22 @@ saeczi <- function(samp_dat,
                                  log_X)
         })
 
-      names(boot_res) <- c("preds", "log")
+      names(boot_res) <- c("preds")
 
     } else {
 
       res <-
-        purrr::map(.x = boot_samp_ls,
-                   .f = \(.x) {
-                     boot_rep(boot_samp = .x,
-                              domain_level,
-                              boot_lin_formula,
-                              boot_log_formula)
-                   },
-                   .progress = list(
-                     type = "iterator",
-                     clear = TRUE
-                   ))
+        map(.x = boot_samp_ls,
+            .f = \(.x) {
+              boot_rep(boot_samp = .x,
+                       domain_level,
+                       boot_lin_formula,
+                       boot_log_formula)
+            },
+            .progress = list(
+              type = "iterator",
+              clear = TRUE
+            ))
 
       beta_lm_mat <- res |>
         map_dfr(.f = ~ .x$beta_lm) |>

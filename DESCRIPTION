@@ -1,7 +1,7 @@
 Package: saeczi
 Type: Package
 Title: Small Area Estimation for Continuous Zero Inflated Data
-Version: 0.1.3
+Version: 0.2.0
 Authors@R: c(person("Josh", "Yamamoto", role = c("aut", "cre"),
                     email = "joshuayamamoto5@gmail.com"),
              person("Dinan", "Elsyad", role = "aut"),
@@ -28,8 +28,9 @@ Suggests: testthat (>= 3.0.0)
 Config/testthat/edition: 3
 Depends: R (>= 4.1.0)
 LinkingTo: Rcpp, RcppEigen
+URL: https://harvard-ufds.github.io/saeczi/
 NeedsCompilation: yes
-Packaged: 2024-04-15 14:39:54 UTC; joshuayamamoto
+Packaged: 2024-06-06 14:36:29 UTC; joshuayamamoto
 Author: Josh Yamamoto [aut, cre],
   Dinan Elsyad [aut],
   Grayson White [aut],
@@ -38,4 +39,4 @@ Author: Josh Yamamoto [aut, cre],
   Kelly McConville [aut],
   Kate Hu [aut]
 Repository: CRAN
-Date/Publication: 2024-04-15 15:00:03 UTC
+Date/Publication: 2024-06-06 14:50:02 UTC
